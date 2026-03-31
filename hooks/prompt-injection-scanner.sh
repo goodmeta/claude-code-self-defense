@@ -32,6 +32,13 @@ fi
 
 WARNINGS=""
 
+# Determine if this is a security/documentation file (higher false positive risk)
+# These files legitimately discuss injection attacks, so we raise the threshold
+SECURITY_DOC=false
+if echo "$FILE_PATH" | grep -qEi '(security|pentest|hack|attack|injection|threat|vuln|ctf|owasp|defense|README|CLAUDE|docs/|test/|tests/|spec/|__tests__|\.test\.|\.spec\.)'; then
+  SECURITY_DOC=true
+fi
+
 # Read file content (first 10000 chars to keep it fast)
 CONTENT=$(head -c 10000 "$FILE_PATH" 2>/dev/null || true)
 [ -z "$CONTENT" ] && exit 0
@@ -180,6 +187,15 @@ fi
 # OUTPUT
 # ============================================================
 if [ -n "$WARNINGS" ]; then
+  # Count number of distinct warning signals
+  SIGNAL_COUNT=$(printf '%b' "$WARNINGS" | grep -c 'INJECTION\|EXFIL' || true)
+
+  # For security docs/tests, require 2+ signals to reduce false positives
+  # (these files legitimately discuss injection attacks)
+  if [ "$SECURITY_DOC" = true ] && [ "$SIGNAL_COUNT" -lt 2 ]; then
+    exit 0
+  fi
+
   context=$(printf '%b' "$WARNINGS" | jq -Rs .)
   cat <<ENDJSON
 {

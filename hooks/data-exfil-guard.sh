@@ -16,6 +16,12 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
 [ -z "$CMD" ] && exit 0
 
+# Strip heredoc/quoted content from git commits to avoid false positives
+if echo "$CMD" | grep -qE '(git\s+commit|cat\s+<<)'; then
+  CMD=$(echo "$CMD" | sed '/<<.*EOF/,/^[[:space:]]*EOF/d')
+  CMD=$(echo "$CMD" | sed -E "s/-m[[:space:]]+\"[^\"]*\"//g; s/-m[[:space:]]+'[^']*'//g")
+fi
+
 BLOCKED=""
 WARNINGS=""
 

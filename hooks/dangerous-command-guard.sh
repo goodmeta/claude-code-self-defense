@@ -16,6 +16,20 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
 [ -z "$CMD" ] && exit 0
 
+# Strip heredoc content and quoted strings from git commit messages.
+# Commit message text is not executable — scanning it causes false positives
+# when messages describe attack patterns (e.g., "catches base64 -d | bash").
+CMD_SAFE="$CMD"
+if echo "$CMD_SAFE" | grep -qE '(git\s+commit|cat\s+<<)'; then
+  # Remove heredoc blocks: <<'EOF' ... EOF and <<EOF ... EOF
+  CMD_SAFE=$(echo "$CMD_SAFE" | sed '/<<.*EOF/,/^[[:space:]]*EOF/d')
+  # Remove -m "..." or -m '...' arguments
+  CMD_SAFE=$(echo "$CMD_SAFE" | sed -E "s/-m[[:space:]]+\"[^\"]*\"//g; s/-m[[:space:]]+'[^']*'//g")
+fi
+
+# Use sanitized command for all pattern matching
+CMD="$CMD_SAFE"
+
 BLOCKED=""
 WARNINGS=""
 
@@ -94,6 +108,26 @@ if echo "$CMD" | grep -qE 'eval\s.*\$\((curl|wget)'; then
   BLOCKED="${BLOCKED}BLOCKED: eval of remote content.\n"
 fi
 
+# Decode-and-execute: base64/openssl decoded output piped to shell
+if echo "$CMD" | grep -qE '(base64\s+(-d|--decode)|openssl\s.*(enc|base64).*-d|-d.*base64)\s*.*\|\s*(bash|sh|zsh|python|perl|ruby|node)'; then
+  BLOCKED="${BLOCKED}BLOCKED: Decoded payload piped to shell interpreter — obfuscated code execution.\n"
+fi
+
+# Python exec(base64.b64decode(...)) and similar inline decode-exec
+if echo "$CMD" | grep -qE 'python[23]?\s+-c\s.*\b(exec|eval)\s*\(.*\b(b64decode|decode|decompress)'; then
+  BLOCKED="${BLOCKED}BLOCKED: Python inline decode-and-execute — obfuscated code execution.\n"
+fi
+
+# Variable capture + eval: x=$(base64 -d ...); eval $x
+if echo "$CMD" | grep -qE '(base64\s+(-d|--decode)|openssl\s.*-d).*;\s*(eval|source|\.)\s'; then
+  BLOCKED="${BLOCKED}BLOCKED: Decoded content captured and evaluated — obfuscated code execution.\n"
+fi
+
+# xxd/printf decode piped to shell
+if echo "$CMD" | grep -qE '(xxd\s+-r|printf\s.*\\x)\s*.*\|\s*(bash|sh|zsh)'; then
+  BLOCKED="${BLOCKED}BLOCKED: Hex-decoded payload piped to shell.\n"
+fi
+
 # ============================================================
 # 4. CREDENTIAL / SECRET THEFT
 # ============================================================
@@ -170,7 +204,44 @@ if echo "$CMD" | grep -qE '(curl|wget).*crontab|crontab.*\|\s*(curl|wget)'; then
 fi
 
 # ============================================================
-# 8. HISTORY / LOG TAMPERING
+# 8. SPAWNED SCRIPT PRE-SCAN
+# ============================================================
+
+# When running a script file, check if it contains dangerous imports/calls
+# This catches: python3 evil.py, node evil.js, ruby evil.rb, bash evil.sh
+SCRIPT_FILE=""
+if echo "$CMD" | grep -qE '^(python[23]?|node|ruby|bash|sh|zsh|perl) +[^\-]'; then
+  # Extract the script path: skip the interpreter name, take the first non-flag argument
+  SCRIPT_FILE=$(echo "$CMD" | awk '{for(i=2;i<=NF;i++){if($i !~ /^-/){print $i; exit}}}')
+fi
+
+if [ -n "$SCRIPT_FILE" ] && [ -f "$SCRIPT_FILE" ]; then
+  SCRIPT_CONTENT=$(head -c 5000 "$SCRIPT_FILE" 2>/dev/null || true)
+  if [ -n "$SCRIPT_CONTENT" ]; then
+    SCRIPT_LOWER=$(echo "$SCRIPT_CONTENT" | tr '[:upper:]' '[:lower:]')
+
+    # Python: socket reverse shells, os.system, subprocess with shell
+    # Check independently since import and connect are typically on different lines
+    if echo "$SCRIPT_LOWER" | grep -qE '(import socket|socket\.socket)'; then
+      if echo "$SCRIPT_LOWER" | grep -qE '(connect|dup2|exec|popen|system|subprocess)'; then
+        BLOCKED="${BLOCKED}BLOCKED: Script $SCRIPT_FILE contains socket+exec pattern — likely reverse shell.\n"
+      fi
+    fi
+
+    # Any script: downloads + executes
+    if echo "$SCRIPT_LOWER" | grep -qE '(urllib|requests|http\.client|wget|curl)' && echo "$SCRIPT_LOWER" | grep -qE '(exec|eval|system|popen|subprocess|spawn)'; then
+      WARNINGS="${WARNINGS}WARNING: Script $SCRIPT_FILE downloads content and executes code. Review before running.\n"
+    fi
+
+    # Bash scripts: check for the same patterns we check in commands
+    if echo "$SCRIPT_CONTENT" | grep -qE '(\/dev\/tcp|nc\s.*-e|mkfifo.*nc|curl.*\|\s*bash)'; then
+      BLOCKED="${BLOCKED}BLOCKED: Script $SCRIPT_FILE contains reverse shell / RCE patterns.\n"
+    fi
+  fi
+fi
+
+# ============================================================
+# 9. HISTORY / LOG TAMPERING
 # ============================================================
 
 if echo "$CMD" | grep -qE '(history\s+-c|>.*\.bash_history|>.*\.zsh_history|unset\s+HISTFILE|HISTSIZE=0)'; then

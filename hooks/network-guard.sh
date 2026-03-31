@@ -21,6 +21,11 @@ case "$TOOL" in
   Bash)
     CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
     [ -z "$CMD" ] && exit 0
+    # Strip heredoc/quoted content from git commits to avoid false positives
+    if echo "$CMD" | grep -qE '(git\s+commit|cat\s+<<)'; then
+      CMD=$(echo "$CMD" | sed '/<<.*EOF/,/^[[:space:]]*EOF/d')
+      CMD=$(echo "$CMD" | sed -E "s/-m[[:space:]]+\"[^\"]*\"//g; s/-m[[:space:]]+'[^']*'//g")
+    fi
     # Only check commands that make network requests
     echo "$CMD" | grep -qEi '(curl|wget|fetch|http|nc |ncat |ssh |scp |rsync |ftp )' || exit 0
     # Extract URLs from the command
@@ -144,6 +149,29 @@ check_url() {
   if echo "$url" | grep -qE '://[^/]*@[^/]*@'; then
     BLOCKED="${BLOCKED}BLOCKED: Double-@ URL obfuscation — redirect attack.\n"
     return 0
+  fi
+
+  # ----------------------------------------------------------
+  # DNS REBINDING CHECK — resolve hostname, check for private IPs
+  # ----------------------------------------------------------
+
+  # Only resolve if it looks like a hostname (not an IP)
+  if echo "$host" | grep -qE '^[a-zA-Z]'; then
+    RESOLVED_IP=""
+    if command -v dig >/dev/null 2>&1; then
+      RESOLVED_IP=$(dig +short +time=1 +tries=1 "$host" 2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)
+    elif command -v getent >/dev/null 2>&1; then
+      RESOLVED_IP=$(getent hosts "$host" 2>/dev/null | awk '{print $1}' | head -1)
+    elif command -v python3 >/dev/null 2>&1; then
+      RESOLVED_IP=$(python3 -c "import socket; print(socket.gethostbyname('$host'))" 2>/dev/null)
+    fi
+
+    if [ -n "$RESOLVED_IP" ]; then
+      if echo "$RESOLVED_IP" | grep -qE '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0)'; then
+        BLOCKED="${BLOCKED}BLOCKED: DNS rebinding — $host resolves to private IP $RESOLVED_IP.\n"
+        return 0
+      fi
+    fi
   fi
 
   # ----------------------------------------------------------

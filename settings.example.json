@@ -52,6 +52,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/post-install-audit.sh",
+            "timeout": 15,
+            "statusMessage": "Running post-install security audit..."
+          }
+        ]
+      }
     ]
   }
 }

@@ -35,6 +35,7 @@ HOOKS=(
   "data-exfil-guard.sh"
   "prompt-injection-scanner.sh"
   "pkg-security-check.sh"
+  "post-install-audit.sh"
 )
 
 echo "Installing hooks to $SCRIPTS_DIR..."
@@ -119,6 +120,7 @@ echo "  2. network-guard.sh            — Blocks SSRF, internal IP access, meta
 echo "  3. data-exfil-guard.sh         — Blocks data exfiltration patterns"
 echo "  4. prompt-injection-scanner.sh — Scans files for prompt injection before reading"
 echo "  5. pkg-security-check.sh       — Checks packages for malware, typosquats, vulns"
+echo "  6. post-install-audit.sh       — Audits lock files after package installs"
 echo ""
 echo "To verify: python3 $(dirname "$0")/tests/test-hooks.py"
 echo ""

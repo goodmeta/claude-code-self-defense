@@ -8,7 +8,7 @@
   /____/_____/_____/_/       /_____/_____/_/   /_____/_/ |_//____/_____/
 
   ┌─────────────────────────────────────────────────────────┐
-  │  5 hooks  ·  90 tests  ·  8 attack vectors  ·  0 deps  │
+  │  6 hooks  ·  90 tests  ·  8 attack vectors  ·  0 deps  │
   └─────────────────────────────────────────────────────────┘
 ```
 
@@ -53,6 +53,7 @@ cd claude-code-self-defense
 │ 07. Sandbox Escape / RCE        │ dangerous-command-guard.sh     │ BLOCK    │
 │ 08. Multi-Modal Injection       │ prompt-injection-scanner.sh    │ WARN     │
 │ ──  Supply Chain Attack         │ pkg-security-check.sh          │ BLOCK    │
+│ ──  Post-Install Audit          │ post-install-audit.sh          │ WARN     │
 └─────────────────────────────────┴────────────────────────────────┴──────────┘
 ```
 
@@ -97,7 +98,7 @@ $ claude "check the internal API"
 
 ---
 
-## 5 hooks, 90 tests
+## 6 hooks, 90 tests
 
 | # | Hook | Guards against | Tested |
 |---|------|---------------|--------|
@@ -106,6 +107,7 @@ $ claude "check the internal API"
 | 3 | **`data-exfil-guard.sh`** | `env\|curl`, base64 encoding pipelines, clipboard exfil (`pbpaste\|curl`), DNS exfil, bulk `find\|tar\|curl`, credential piping | 12 tests |
 | 4 | **`prompt-injection-scanner.sh`** | "Ignore previous instructions", role hijacking, `[SYSTEM]` markers, zero-width unicode, LLM control tokens (`<\|im_start\|>`), base64 payloads, HTML comment injection, security doc false-positive reduction | 17 tests |
 | 5 | **`pkg-security-check.sh`** | Known malicious packages (npm/pip/cargo/gem), Node.js built-in shims, compromised versions (`ua-parser-js@0.7.29`), typosquats via Levenshtein distance, real-time OSV.dev CVE lookup | — |
+| 6 | **`post-install-audit.sh`** | Unpinned critical packages (axios, ua-parser-js, colors, coa, etc.), post-install `npm audit` for high/critical vulnerabilities | — |
 
 ```bash
 $ python3 tests/test-hooks.py
@@ -140,12 +142,14 @@ cp hooks/network-guard.sh ~/.claude/scripts/
 cp hooks/data-exfil-guard.sh ~/.claude/scripts/
 cp hooks/prompt-injection-scanner.sh ~/.claude/scripts/
 cp hooks/pkg-security-check.sh ~/.claude/scripts/
+cp hooks/post-install-audit.sh ~/.claude/scripts/
 
 chmod +x ~/.claude/scripts/dangerous-command-guard.sh
 chmod +x ~/.claude/scripts/network-guard.sh
 chmod +x ~/.claude/scripts/data-exfil-guard.sh
 chmod +x ~/.claude/scripts/prompt-injection-scanner.sh
 chmod +x ~/.claude/scripts/pkg-security-check.sh
+chmod +x ~/.claude/scripts/post-install-audit.sh
 ```
 
 **Step 3: Add hooks to your Claude Code settings.**
@@ -198,6 +202,18 @@ Open `~/.claude/settings.json` (create it if it doesn't exist) and add the `hook
             "type": "command",
             "command": "~/.claude/scripts/prompt-injection-scanner.sh",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/post-install-audit.sh",
+            "timeout": 15
           }
         ]
       }
@@ -388,6 +404,32 @@ Binary files, images, files >1MB, and known code file extensions (for certain pa
 
 ### Pick what you need
 
+<details>
+<summary><strong>6. post-install-audit.sh</strong> — Post-install lock file audit, unpinned critical packages</summary>
+
+**Applies to:** `Bash` tool (PostToolUse — runs after install commands complete)
+
+#### Warns
+
+| Category | Examples |
+|----------|---------|
+| Unpinned critical packages | `"axios": "^1.7.9"` in package.json — critical packages should use exact versions to prevent supply chain attacks |
+| High/critical vulnerabilities | Runs `npm audit --omit=dev` after install and surfaces high/critical findings |
+
+#### Critical packages monitored
+
+`axios`, `ua-parser-js`, `coa`, `rc`, `colors`, `faker`, `event-stream`, `node-ipc`, `minimist` — all have been targets of supply chain attacks.
+
+#### Allows
+
+All non-install commands pass through without inspection.
+
+</details>
+
+---
+
+## Configuration
+
 | Your risk | Hook to enable |
 |-----------|---------------|
 | Reading untrusted files | `prompt-injection-scanner.sh` |
@@ -395,6 +437,7 @@ Binary files, images, files >1MB, and known code file extensions (for certain pa
 | Running any shell commands | `dangerous-command-guard.sh` |
 | Env has secrets/keys | `data-exfil-guard.sh` |
 | Installing packages | `pkg-security-check.sh` |
+| Post-install verification | `post-install-audit.sh` |
 
 ### Customizing
 
